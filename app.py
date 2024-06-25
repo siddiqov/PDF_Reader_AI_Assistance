@@ -10,6 +10,7 @@ from langchain.vectorstores import FAISS
 from langchain.llms import OpenAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.callbacks import get_openai_callback
+from langchain.docstore.document import Document
 
 # Load environment variables
 load_dotenv()
@@ -43,10 +44,15 @@ def create_vector_store(chunks, store_name):
         conn = sqlite3.connect('my_database.db')
         create_vector_store_table(conn)
         c = conn.cursor()
+
+        # Convert text chunks to embeddings
+        embeddings = OpenAIEmbeddings()
+        vectors = embeddings.embed_documents(chunks)
         
         # Serialize and insert each vector into the database
-        for idx, vec in enumerate(chunks):
-            c.execute('INSERT INTO vector_store (store_name, vector) VALUES (?, ?)', (store_name, sqlite3.Binary(vec.tobytes())))
+        for vec in vectors:
+            vec_np = np.array(vec, dtype=np.float32)
+            c.execute('INSERT INTO vector_store (store_name, vector) VALUES (?, ?)', (store_name, sqlite3.Binary(vec_np.tobytes())))
         
         conn.commit()
         conn.close()
@@ -70,52 +76,60 @@ def load_vector_store(store_name):
         c.execute('SELECT vector FROM vector_store WHERE store_name=?', (store_name,))
         vectors = [np.frombuffer(row[0], dtype=np.float32) for row in c.fetchall()]
         
-        # Assume we know chunk size and overlap for reconstruction
-        chunk_size = 1000
-        chunk_overlap = 200
-        chunks = []
-        for i in range(0, len(vectors), chunk_size - chunk_overlap):
-            chunks.append(vectors[i:i + chunk_size])
-        
         conn.close()
         
-        return chunks
+        return vectors
     
     except sqlite3.Error as e:
         st.error(f"SQLite error while loading vector store: {e}")
         return []
 
+def summarize_text(text):
+    """Summarize text to reduce token count."""
+    llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
+    response = llm.run(f"Please summarize the following text: {text}")
+    return response
+
 def main():
     st.header("Chat with PDF")
   
-    pdf = st.file_uploader("Upload the PDF", type='pdf')
-    if pdf is not None:
-        pdf_reader = PdfReader(pdf)
-        text = ""
-        
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-        
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, 
-            chunk_overlap=200,
-            length_function=len)
-        
-        chunks = text_splitter.split_text(text=text)
-        store_name = pdf.name[:-4]
-        
-        if os.path.exists(f"{store_name}.pkl"):
-            st.write("Embeddings Loaded from the Disk")
-            chunks = load_vector_store(store_name)
-        else:
-            st.write("Embeddings Computation Completed")
-            create_vector_store(chunks, store_name)
+    pdf_files = st.file_uploader("Upload the PDF files", type='pdf', accept_multiple_files=True)
+    if pdf_files:
+        all_chunks = []
+        for pdf in pdf_files:
+            pdf_reader = PdfReader(pdf)
+            text = ""
+            
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+            
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000, 
+                chunk_overlap=200,
+                length_function=len)
+            
+            chunks = text_splitter.split_text(text=text)
+            
+            # Summarize large chunks to reduce token count
+            summarized_chunks = [summarize_text(chunk) if len(chunk.split()) > 500 else chunk for chunk in chunks]
+            store_name = pdf.name[:-4]
+            
+            if os.path.exists(f"{store_name}.pkl"):
+                st.write(f"Embeddings Loaded from the Disk for {pdf.name}")
+                chunks = load_vector_store(store_name)
+            else:
+                st.write(f"Embeddings Computation Completed for {pdf.name}")
+                create_vector_store(summarized_chunks, store_name)
+            
+            all_chunks.extend(summarized_chunks)
         
         query = st.text_input("Ask question about your Judicial PDF files: ")
         if query:
-            docs = chunks  # Assuming chunks as input documents for similarity search
+            # Convert all chunks to Document objects
+            docs = [Document(page_content=chunk) for chunk in all_chunks]
+            
             llm = OpenAI(temperature=0)  # Adjust parameters as per your needs
-            chain = load_qa_chain(llm=llm, chain_type="stuff")
+            chain = load_qa_chain(llm=llm, chain_type="map_reduce")
             with get_openai_callback() as cb:
                 response = chain.run(input_documents=docs, question=query)
                 st.write(response)
