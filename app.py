@@ -5,7 +5,7 @@ import numpy as np
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_community.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.llms import OpenAI
 from langchain.chains.question_answering import load_qa_chain
@@ -28,8 +28,7 @@ with st.sidebar:
     - [Streamlit](https://streamlit.io/)
     - [LangChain](https://python.langchain.com/)
     - [OpenAI](https://platform.openai.com/docs/models) LLM model
-    '''
-    )
+    ''')
     st.write('Made with by [Prompt Engineer](https://youtube.com/@engineerprompt)')
 
 def create_tables(conn):
