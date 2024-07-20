@@ -1,4 +1,3 @@
-#This code is working
 import os
 import streamlit as st
 import sqlite3
@@ -8,11 +7,12 @@ from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings.openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import OpenAI  # Import from langchain_community instead of langchain
+from langchain_community.llms import OpenAI
 from langchain.chains.question_answering import load_qa_chain
-from langchain_community.callbacks.manager import get_openai_callback  # Updated import
+from langchain_community.callbacks.manager import get_openai_callback
 from langchain.docstore.document import Document
 import hashlib
+import threading
 
 # Load environment variables
 load_dotenv()
@@ -90,17 +90,58 @@ def load_vector_store(store_name):
         return []
 
 # Function to summarize text
-def summarize_text(text):
+def summarize_text(text, language):
     llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
-    response = llm.run(f"Please summarize the following text: {text}")
+    if language == "English":
+        prompt = f"Please summarize the following text in English: {text}"
+    elif language == "Spanish":
+        prompt = f"Por favor, resume el siguiente texto en español: {text}"
+    response = llm.run(prompt)
     return response
+
+# Function to handle PDF processing and text summarization
+def process_pdfs(pdf_files, language):
+    all_chunks = []
+    conn = sqlite3.connect('my_database.db')
+    create_tables(conn)
+
+    for pdf in pdf_files:
+        pdf_reader = PdfReader(pdf)
+        text = ""
+
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000, 
+            chunk_overlap=200,
+            length_function=len)
+
+        chunks = text_splitter.split_text(text=text)
+
+        summarized_chunks = [summarize_text(chunk, language) if len(chunk.split()) > 500 else chunk for chunk in chunks]
+        store_name = pdf.name[:-4]
+        file_content = pdf.getvalue()
+        document_hash = compute_hash(file_content)
+
+        if document_exists(conn, pdf.name, document_hash):
+            chunks = load_vector_store(store_name)
+        else:
+            create_vector_store(summarized_chunks, store_name)
+            save_document_metadata(conn, pdf.name, document_hash)
+
+        all_chunks.extend(summarized_chunks)
+
+    conn.close()
+    return all_chunks  # Return all_chunks after processing
+
 
 # Main function to run the Streamlit app
 def main():
     st.set_page_config(page_title="LLM Chat App", page_icon=":robot_face:", layout="wide")
     
     # Header
-    st.title("Chat With Judicial PDF document")
+    st.title("Chat With Judicial PDF Documents")
     st.markdown("---")
     
     # Sidebar
@@ -113,63 +154,47 @@ def main():
     """)
     st.sidebar.markdown("---")
     
+    # Language selection
+    language = st.selectbox("Select Language", ["English", "Spanish"])
+    
     # Main content area
     with st.container():
         pdf_files = st.file_uploader("Upload PDF files", type='pdf', accept_multiple_files=True)
         
         if pdf_files:
-            all_chunks = []
-            conn = sqlite3.connect('my_database.db')
-            create_tables(conn)
-            
-            for pdf in pdf_files:
-                pdf_reader = PdfReader(pdf)
-                text = ""
-                
-                for page in pdf_reader.pages:
-                    text += page.extract_text()
-                
-                text_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1000, 
-                    chunk_overlap=200,
-                    length_function=len)
-                
-                chunks = text_splitter.split_text(text=text)
-                
-                summarized_chunks = [summarize_text(chunk) if len(chunk.split()) > 500 else chunk for chunk in chunks]
-                store_name = pdf.name[:-4]
-                file_content = pdf.getvalue()
-                document_hash = compute_hash(file_content)
-                
-                if document_exists(conn, pdf.name, document_hash):
-                    st.write(f"Embeddings Loaded from Disk for {pdf.name}")
-                    chunks = load_vector_store(store_name)
-                else:
-                    st.write(f"Embeddings Computation Completed for {pdf.name}")
-                    create_vector_store(summarized_chunks, store_name)
-                    save_document_metadata(conn, pdf.name, document_hash)
-                
-                all_chunks.extend(summarized_chunks)
-            
-            conn.close()
+            # Define a spinner to show while processing
+            with st.spinner('Processing PDFs...'):
+                # Use threading to run the PDF processing in the background
+                thread = threading.Thread(target=process_pdfs, args=(pdf_files, language))
+                thread.start()
 
-            query = st.text_input("Ask question about your Judicial PDF files:")
-            if query:
-                docs = [Document(page_content=chunk) for chunk in all_chunks]
-                
-                llm = OpenAI(temperature=0)
-                chain = load_qa_chain(llm=llm, chain_type="map_reduce")
-                
-                with get_openai_callback() as cb:
-                    response = chain.run(input_documents=docs, question=query)
-                    st.markdown("---")
-                    st.subheader("Answer:")
-                    st.write(response)
-                    st.markdown("---")
-                    st.write(f"Total Tokens: {cb.total_tokens}")
-                    st.write(f"Prompt Tokens: {cb.prompt_tokens}")
-                    st.write(f"Completion Tokens: {cb.completion_tokens}")
-                    st.write(f"Total Cost (USD): ${cb.total_cost:.5f}")
+                # Wait for the thread to complete
+                thread.join()
+
+                # Once processing is done, display the input box for questions
+                query = st.text_input(f"Ask question about your Judicial PDF files ({language}):")
+                if query:
+                    all_chunks = process_pdfs(pdf_files, language)  # Assign all_chunks here
+
+                    docs = [Document(page_content=chunk) for chunk in all_chunks]
+
+                    llm = OpenAI(temperature=0)
+                    chain = load_qa_chain(llm=llm, chain_type="map_reduce")
+
+                    with get_openai_callback() as cb:
+                        if language == "Spanish":
+                            query = f"Por favor, responde en español: {query}"
+
+                        response = chain.run(input_documents=docs, question=query)
+                        st.markdown("---")
+                        st.subheader("Answer:")
+                        st.write(response)
+                        st.markdown("---")
+                        st.write(f"Total Tokens: {cb.total_tokens}")
+                        st.write(f"Prompt Tokens: {cb.prompt_tokens}")
+                        st.write(f"Completion Tokens: {cb.completion_tokens}")
+                        st.write(f"Total Cost (USD): ${cb.total_cost:.5f}")
 
 if __name__ == '__main__':
     main()
+
