@@ -141,14 +141,14 @@ def main():
     st.set_page_config(page_title="LLM Chat App", page_icon=":robot_face:", layout="wide")
     
     # Header
-    st.title("Chat With Judicial PDF Documents")
+    st.title("AI Receptionist")
     st.markdown("---")
     
-    # Sidebar
+    # Suitable Title
     st.sidebar.title("Navigation")
     st.sidebar.markdown("""
         ## Sidebar
-        Upload your PDF files and ask questions about judicial documents.
+        Upload your URL/PDF files and ask questions about Location.
         
         Made with ❤️ by [DanzeeTech](https://www.danzeetech.com/)
     """)
@@ -172,7 +172,7 @@ def main():
                 thread.join()
 
                 # Once processing is done, display the input box for questions
-                query = st.text_input(f"Ask question about your Judicial PDF files ({language}):")
+                query = st.text_input(f"How can I help you ({language}):")
                 if query:
                     all_chunks = process_pdfs(pdf_files, language)  # Assign all_chunks here
 
