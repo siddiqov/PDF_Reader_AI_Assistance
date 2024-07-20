@@ -13,6 +13,7 @@ from langchain_community.callbacks.manager import get_openai_callback
 from langchain.docstore.document import Document
 import hashlib
 import threading
+from transformers import pipeline
 
 # Load environment variables
 load_dotenv()
@@ -135,6 +136,20 @@ def process_pdfs(pdf_files, language):
     conn.close()
     return all_chunks  # Return all_chunks after processing
 
+# Function to get the LLM based on user selection
+def get_llm(model_choice):
+    if model_choice == "GPT":
+        return OpenAI(temperature=0)
+    elif model_choice == "BERT":
+        # Initialize the BERT question answering pipeline
+        return pipeline("question-answering")
+    else:
+        raise ValueError("Invalid model choice")
+
+# Function to get response from BERT-based model
+def get_bert_response(pipeline, context, question):
+    result = pipeline(question=question, context=context)
+    return result['answer']
 
 # Main function to run the Streamlit app
 def main():
@@ -149,7 +164,8 @@ def main():
     st.sidebar.markdown("""
         ## Sidebar
         Upload your URL/PDF files and ask questions about Location.
-        
+    """)
+    st.sidebar.markdown("""
         Made with ❤️ by [DanzeeTech](https://www.danzeetech.com/)
     """)
     st.sidebar.markdown("---")
@@ -157,6 +173,9 @@ def main():
     # Language selection
     language = st.selectbox("Select Language", ["English", "Spanish"])
     
+    # Model selection
+    model_choice = st.selectbox("Select Model", ["GPT", "BERT"])
+
     # Main content area
     with st.container():
         pdf_files = st.file_uploader("Upload PDF files", type='pdf', accept_multiple_files=True)
@@ -178,23 +197,31 @@ def main():
 
                     docs = [Document(page_content=chunk) for chunk in all_chunks]
 
-                    llm = OpenAI(temperature=0)
-                    chain = load_qa_chain(llm=llm, chain_type="map_reduce")
+                    if model_choice == "GPT":
+                        llm = get_llm(model_choice)
+                        chain = load_qa_chain(llm=llm, chain_type="map_reduce")
 
-                    with get_openai_callback() as cb:
-                        if language == "Spanish":
-                            query = f"Por favor, responde en español: {query}"
+                        with get_openai_callback() as cb:
+                            if language == "Spanish":
+                                query = f"Por favor, responde en español: {query}"
 
-                        response = chain.run(input_documents=docs, question=query)
+                            response = chain.run(input_documents=docs, question=query)
+                            st.markdown("---")
+                            st.subheader("Answer:")
+                            st.write(response)
+                            st.markdown("---")
+                            st.write(f"Total Tokens: {cb.total_tokens}")
+                            st.write(f"Prompt Tokens: {cb.prompt_tokens}")
+                            st.write(f"Completion Tokens: {cb.completion_tokens}")
+                            st.write(f"Total Cost (USD): ${cb.total_cost:.5f}")
+
+                    elif model_choice == "BERT":
+                        bert_pipeline = get_llm(model_choice)
+                        context = " ".join([chunk for chunk in all_chunks])
+                        response = get_bert_response(bert_pipeline, context, query)
                         st.markdown("---")
                         st.subheader("Answer:")
                         st.write(response)
-                        st.markdown("---")
-                        st.write(f"Total Tokens: {cb.total_tokens}")
-                        st.write(f"Prompt Tokens: {cb.prompt_tokens}")
-                        st.write(f"Completion Tokens: {cb.completion_tokens}")
-                        st.write(f"Total Cost (USD): ${cb.total_cost:.5f}")
 
 if __name__ == '__main__':
     main()
-
