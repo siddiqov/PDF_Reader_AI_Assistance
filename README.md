@@ -1,1 +1,1 @@
-# PDF_Reader_AI_Assistance
+# BERT based Enhanced Location Based Information Retrieval System
